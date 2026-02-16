@@ -129,15 +129,20 @@ def create_investment_from_form(name, description, initial_investment, discount_
 
 
 def display_metrics_cards(metrics):
-    """Display key metrics in card format."""
-    col1, col2, col3, col4 = st.columns(4)
+    """Display key metrics in card format with autosizing."""
+    # Use auto-sizing columns instead of fixed equal widths
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+    
+    # Helper function to format currency as integer
+    def format_currency_int(amount):
+        return f"${amount:,.0f}"
     
     with col1:
         npv_class = "positive" if metrics['npv'] > 0 else "negative"
         st.markdown(f"""
         <div class="metric-card">
             <h4 style="margin:0; color: #666;">Net Present Value</h4>
-            <h2 class="{npv_class}" style="margin:0.5rem 0 0 0;">{format_currency(metrics['npv'])}</h2>
+            <h2 class="{npv_class}" style="margin:0.5rem 0 0 0;">{format_currency_int(metrics['npv'])}</h2>
         </div>
         """, unsafe_allow_html=True)
     
@@ -223,6 +228,67 @@ def create_cash_flow_chart(breakdown):
     return fig
 
 
+def create_cumulative_pv_comparison_chart(investments):
+    """
+    Create a comparison chart showing cumulative PV for multiple investments.
+    
+    Args:
+        investments: List of Investment objects to compare
+    
+    Returns:
+        Plotly figure with cumulative PV lines for each investment
+    """
+    fig = go.Figure()
+    
+    # Define a color palette for different investments
+    colors = px.colors.qualitative.Plotly
+    
+    for idx, investment in enumerate(investments):
+        # Calculate the breakdown for this investment
+        breakdown = DCFCalculator.calculate_npv_breakdown(investment)
+        df = pd.DataFrame(breakdown)
+        
+        # Add trace for this investment
+        fig.add_trace(
+            go.Scatter(
+                x=df['period'],
+                y=df['cumulative_pv'],
+                name=investment.name,
+                mode='lines+markers',
+                line=dict(width=3, color=colors[idx % len(colors)]),
+                marker=dict(size=8),
+                hovertemplate=(
+                    f'<b>{investment.name}</b><br>' +
+                    'Period: %{x}<br>' +
+                    'Cumulative PV: $%{y:,.2f}<br>' +
+                    '<extra></extra>'
+                )
+            )
+        )
+    
+    # Add zero line
+    fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
+    
+    # Update layout
+    fig.update_layout(
+        title="Cumulative Present Value Comparison",
+        xaxis_title="Period (Years)",
+        yaxis_title="Cumulative PV ($)",
+        height=500,
+        hovermode='x unified',
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01,
+            bgcolor="rgba(255, 255, 255, 0.8)"
+        )
+    )
+    
+    return fig
+
+
 def create_sensitivity_chart(sensitivity_data):
     """Create sensitivity analysis chart."""
     df = pd.DataFrame(sensitivity_data)
@@ -301,9 +367,9 @@ def main():
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Choose a section:",
-        ["🏠 Home", "➕ New Investment", "✏️ Edit Investment", "📊 Analyze Investment", 
-         "⚖️ Compare Investments", "🎲 Monte Carlo Simulation", 
-         "📈 Sensitivity Analysis", "💾 Manage Investments", "📥 Import/Export"]
+        ["🏠 Home", "➕ New Investment", "✏️ Edit Investment", "📊 Analyze Investment",
+         "⚖️ Compare Investments", "🎲 Monte Carlo Simulation",
+         "📈 Sensitivity Analysis", "💾 Manage Investments", "📥 Import/Export", "📐 Formula Reference"]
     )
     
     # Display storage statistics in sidebar
@@ -408,7 +474,7 @@ def main():
     # ========================================================================
     elif page == "➕ New Investment":
         st.header("Create New Investment")
-        st.info("💾 Your investment will be automatically saved when you click 'Create Investment'")
+        st.info("💾 Your investment will be automatically saved when you click Create.")
         
         with st.form("investment_form"):
             col1, col2 = st.columns(2)
@@ -490,14 +556,14 @@ def main():
                             # Calculate metrics
                             metrics = DCFCalculator.calculate_all_metrics(investment)
                             
-                            st.success(f"✅ Investment '{name}' created and saved successfully!")
+                            st.success(f"✅ Investment '{name}' created and saved!")
                             st.balloons()
                             
                             # Show quick preview
                             st.subheader("Quick Preview")
                             display_metrics_cards(metrics)
                         else:
-                            st.error("❌ Failed to save investment. Please try again.")
+                            st.error("âŒ Failed to save investment. Please try again.")
                         
                     except Exception as e:
                         st.error(f"Error creating investment: {str(e)}")
@@ -507,7 +573,7 @@ def main():
     # ========================================================================
     elif page == "✏️ Edit Investment":
         st.header("Edit Investment")
-        st.info("💾 Changes will be automatically saved when you click 'Save Changes'")
+        st.info("💾 Changes will be automatically saved when you click 'Save Changes'.")
         
         investments = st.session_state.data_manager.load_all_investments()
         
@@ -594,7 +660,7 @@ def main():
                     with col1:
                         save_button = st.form_submit_button("💾 Save Changes", use_container_width=True)
                     with col2:
-                        cancel_button = st.form_submit_button("❌ Cancel", use_container_width=True)
+                        cancel_button = st.form_submit_button("âŒ Cancel", use_container_width=True)
                     
                     if save_button:
                         if not name:
@@ -619,7 +685,7 @@ def main():
                                     st.subheader("Updated Metrics")
                                     display_metrics_cards(metrics)
                                 else:
-                                    st.error("❌ Failed to save changes. Please try again.")
+                                    st.error("âŒ Failed to save changes. Please try again.")
                             except Exception as e:
                                 st.error(f"Error updating investment: {str(e)}")
                     
@@ -716,6 +782,27 @@ def main():
             st.warning("You need at least 2 investments to compare. Create more investments first!")
             return
         
+        # Investment selection
+        st.subheader("Select Investments to Compare")
+        investment_options = {inv.name: inv for inv in investments}
+        
+        # Default to all investments selected
+        default_selection = list(investment_options.keys())
+        
+        selected_names = st.multiselect(
+            "Choose investments to compare",
+            options=list(investment_options.keys()),
+            default=default_selection,
+            help="Select at least 2 investments to compare"
+        )
+        
+        # Filter to selected investments
+        if len(selected_names) < 2:
+            st.warning("Please select at least 2 investments to compare.")
+            return
+        
+        selected_investments = [investment_options[name] for name in selected_names]
+        
         # Select ranking metric
         ranking_metric = st.selectbox(
             "Rank By",
@@ -729,9 +816,9 @@ def main():
             "Profitability Index": "pi"
         }
         
-        # Get comparison
+        # Get comparison (only for selected investments)
         comparison = InvestmentComparator.compare_investments(
-            investments,
+            selected_investments,
             ranking_metric=metric_map[ranking_metric]
         )
         
@@ -766,7 +853,12 @@ def main():
         # Comparison charts
         st.subheader("Visual Comparison")
         
-        tab1, tab2, tab3 = st.tabs(["NPV Comparison", "IRR Comparison", "Multi-Metric"])
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "NPV Comparison", 
+            "IRR Comparison", 
+            "Multi-Metric",
+            "Cumulative PV"
+        ])
         
         with tab1:
             fig = px.bar(
@@ -819,6 +911,46 @@ def main():
             )
             
             st.plotly_chart(fig, use_container_width=True)
+        
+        with tab4:
+            # Cumulative PV comparison chart
+            st.markdown("""
+            This chart shows how the cumulative present value evolves over time for each investment.
+            The line that reaches the highest final value (and crosses zero earliest) represents the best investment.
+            """)
+            
+            fig = create_cumulative_pv_comparison_chart(selected_investments)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Add summary statistics
+            st.subheader("Cumulative PV Summary")
+            summary_data = []
+            for inv in selected_investments:
+                breakdown = DCFCalculator.calculate_npv_breakdown(inv)
+                final_pv = breakdown[-1]['cumulative_pv']
+                
+                # Find when it crosses zero (payback in PV terms)
+                crosses_zero_period = None
+                for item in breakdown:
+                    if item['cumulative_pv'] >= 0:
+                        crosses_zero_period = item['period']
+                        break
+                
+                summary_data.append({
+                    'Investment': inv.name,
+                    'Final Cumulative PV': final_pv,
+                    'PV Payback Period': f"{crosses_zero_period} years" if crosses_zero_period is not None else "Never"
+                })
+            
+            summary_df = pd.DataFrame(summary_data)
+            summary_df = summary_df.sort_values('Final Cumulative PV', ascending=False)
+            
+            st.dataframe(
+                summary_df.style.format({
+                    'Final Cumulative PV': '${:,.0f}'
+                }),
+                use_container_width=True
+            )
     
     # ========================================================================
     # MONTE CARLO SIMULATION PAGE (continued from original - no changes needed)
@@ -998,11 +1130,11 @@ def main():
                         st.subheader("Risk Assessment")
                         
                         if prob_positive > 80:
-                            st.success(f"✅ **Low Risk**: {prob_positive:.1f}% probability of positive NPV")
+                            st.success(f"✅ **Low Risk**: {prob_positive:.1f}% chance of positive NPV")
                         elif prob_positive > 60:
-                            st.warning(f"⚠️ **Moderate Risk**: {prob_positive:.1f}% probability of positive NPV")
+                            st.warning(f"⚠️ **Moderate Risk**: {prob_positive:.1f}% chance of positive NPV")
                         else:
-                            st.error(f"❌ **High Risk**: Only {prob_positive:.1f}% probability of positive NPV")
+                            st.error(f"âŒ **High Risk**: Only {prob_positive:.1f}% probability of positive NPV")
                         
                         # Coefficient of variation
                         cv = results.std_npv / results.mean_npv if results.mean_npv != 0 else float('inf')
@@ -1102,7 +1234,7 @@ def main():
                     if len(sign_changes) > 0:
                         idx = sign_changes[0]
                         breakeven_rate = (rates[idx] + rates[idx + 1]) / 2
-                        st.info(f"**Break-even Discount Rate**: ≈ {breakeven_rate:.2%}")
+                        st.info(f"**Break-even Discount Rate**: â‰ˆ {breakeven_rate:.2%}")
                         st.markdown(f"The investment is acceptable when discount rate < {breakeven_rate:.2%}")
     
     # ========================================================================
@@ -1123,7 +1255,7 @@ def main():
         for idx, investment in enumerate(investments):
             metrics = DCFCalculator.calculate_all_metrics(investment)
             
-            with st.expander(f"📁 {investment.name}", expanded=False):
+            with st.expander(f"🔍 {investment.name}", expanded=False):
                 col1, col2, col3 = st.columns([2, 1, 1])
                 
                 with col1:
@@ -1158,7 +1290,7 @@ def main():
                 if success:
                     st.success(f"✅ Backup created: {result}")
                 else:
-                    st.error(f"❌ {result}")
+                    st.error(f"âŒ {result}")
         
         with col2:
             if st.button("🗑️ Clear All Investments"):
@@ -1200,7 +1332,7 @@ def main():
                     filename = f"investments_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
                     
                     st.download_button(
-                        label="⬇️ Download Export File",
+                        label="⬇️ Download Export File",
                         data=export_data,
                         file_name=filename,
                         mime="application/json",
@@ -1212,7 +1344,7 @@ def main():
                     # Cleanup
                     os.unlink(tmp_path)
                 else:
-                    st.error("❌ Export failed")
+                    st.error("âŒ Export failed")
             
             # Show statistics
             stats = st.session_state.data_manager.get_statistics()
@@ -1257,7 +1389,7 @@ def main():
                         st.balloons()
                         st.rerun()
                     else:
-                        st.error(f"❌ {message}")
+                        st.error(f"âŒ {message}")
                 
                 # Cleanup
                 try:
@@ -1276,7 +1408,7 @@ def main():
                 if success:
                     st.success(f"✅ Backup created: {result}")
                 else:
-                    st.error(f"❌ {result}")
+                    st.error(f"âŒ {result}")
             
             # List backups
             backups = st.session_state.data_manager.list_backups()
@@ -1300,9 +1432,364 @@ def main():
                                         st.success(f"✅ {message}")
                                         st.rerun()
                                     else:
-                                        st.error(f"❌ {message}")
+                                        st.error(f"âŒ {message}")
             else:
                 st.info("No backups available yet. Backups are created automatically when needed.")
+    
+    # ========================================================================
+    # FORMULA REFERENCE PAGE
+    # ========================================================================
+    elif page == "📐 Formula Reference":
+        st.header("📐 Formula Reference")
+        st.markdown("""
+        This page provides a comprehensive reference of all mathematical formulas and concepts 
+        used in the Investment Analysis Tool.
+        """)
+        
+        # Create tabs for different formula categories
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📊 DCF Metrics", 
+            "🎲 Monte Carlo", 
+            "📈 Additional Metrics",
+            "📚 Definitions"
+        ])
+        
+        with tab1:
+            st.subheader("Discounted Cash Flow (DCF) Analysis Formulas")
+            
+            # Present Value
+            st.markdown("### 1. Present Value (PV)")
+            st.markdown("""
+            The present value formula discounts a future cash flow back to its value today:
+            """)
+            st.latex(r"PV = \frac{CF_t}{(1 + r)^t}")
+            st.markdown("""
+            Where:
+            - $PV$ = Present Value
+            - $CF_t$ = Cash Flow at time period $t$
+            - $r$ = Discount rate (as a decimal)
+            - $t$ = Time period (usually in years)
+            """)
+            
+            st.markdown("---")
+            
+            # Net Present Value
+            st.markdown("### 2. Net Present Value (NPV)")
+            st.markdown("""
+            NPV is the sum of all present values of cash flows, including the initial investment:
+            """)
+            st.latex(r"NPV = \sum_{t=0}^{n} \frac{CF_t}{(1 + r)^t}")
+            st.markdown("""
+            Where:
+            - $NPV$ = Net Present Value
+            - $CF_t$ = Cash Flow at time period $t$ (negative for initial investment)
+            - $r$ = Discount rate
+            - $t$ = Time period
+            - $n$ = Total number of periods
+            
+            **Decision Rule:**
+            - If $NPV > 0$: Accept the investment (creates value)
+            - If $NPV < 0$: Reject the investment (destroys value)
+            - If $NPV = 0$: Indifferent (breakeven)
+            """)
+            
+            st.markdown("---")
+            
+            # Internal Rate of Return
+            st.markdown("### 3. Internal Rate of Return (IRR)")
+            st.markdown("""
+            IRR is the discount rate that makes NPV equal to zero:
+            """)
+            st.latex(r"0 = \sum_{t=0}^{n} \frac{CF_t}{(1 + IRR)^t}")
+            st.markdown("""
+            Where:
+            - $IRR$ = Internal Rate of Return (the rate we're solving for)
+            - Other variables same as NPV
+            
+            **Decision Rule:**
+            - If $IRR >$ Required Return: Accept the investment
+            - If $IRR <$ Required Return: Reject the investment
+            
+            **Note:** IRR is typically solved numerically using methods like Newton-Raphson iteration.
+            """)
+            
+            st.markdown("---")
+            
+            # Profitability Index
+            st.markdown("### 4. Profitability Index (PI)")
+            st.markdown("""
+            PI measures the ratio of the present value of future cash flows to the initial investment:
+            """)
+            st.latex(r"PI = \frac{\sum_{t=1}^{n} \frac{CF_t}{(1 + r)^t}}{|CF_0|}")
+            st.markdown("""
+            Or equivalently:
+            """)
+            st.latex(r"PI = \frac{NPV + |CF_0|}{|CF_0|} = 1 + \frac{NPV}{|CF_0|}")
+            st.markdown("""
+            Where:
+            - $PI$ = Profitability Index
+            - $CF_0$ = Initial investment (negative value, hence the absolute value)
+            - Other variables same as NPV
+            
+            **Decision Rule:**
+            - If $PI > 1$: Accept the investment (NPV is positive)
+            - If $PI < 1$: Reject the investment (NPV is negative)
+            - If $PI = 1$: Indifferent (NPV is zero)
+            """)
+        
+        with tab2:
+            st.subheader("Monte Carlo Simulation Formulas")
+            
+            st.markdown("### Overview")
+            st.markdown("""
+            Monte Carlo simulation introduces probability distributions to model uncertainty in cash flows, 
+            allowing us to understand the range of possible outcomes rather than a single deterministic result.
+            """)
+            
+            st.markdown("---")
+            
+            # Normal Distribution
+            st.markdown("### 1. Normal Distribution")
+            st.latex(r"f(x) = \frac{1}{\sigma\sqrt{2\pi}} e^{-\frac{1}{2}\left(\frac{x-\mu}{\sigma}\right)^2}")
+            st.markdown("""
+            Where:
+            - $\mu$ = Mean (expected value)
+            - $\sigma$ = Standard deviation (measure of uncertainty)
+            - $x$ = Random variable (cash flow value)
+            
+            **Use Case:** Symmetric uncertainty around a mean value.
+            """)
+            
+            st.markdown("---")
+            
+            # Lognormal Distribution
+            st.markdown("### 2. Lognormal Distribution")
+            st.latex(r"f(x) = \frac{1}{x\sigma\sqrt{2\pi}} e^{-\frac{(\ln x - \mu)^2}{2\sigma^2}}")
+            st.markdown("""
+            Where:
+            - $\mu$ = Mean of the underlying normal distribution
+            - $\sigma$ = Standard deviation of the underlying normal distribution
+            - $x > 0$ (always positive)
+            
+            **Use Case:** Cash flows that cannot be negative (e.g., revenues, costs).
+            """)
+            
+            st.markdown("---")
+            
+            # Triangular Distribution
+            st.markdown("### 3. Triangular Distribution")
+            st.latex(r"""f(x) = \begin{cases}
+            \frac{2(x-a)}{(b-a)(c-a)} & \text{for } a \le x < c \\
+            \frac{2}{b-a} & \text{for } x = c \\
+            \frac{2(b-x)}{(b-a)(b-c)} & \text{for } c < x \le b
+            \end{cases}""")
+            st.markdown("""
+            Where:
+            - $a$ = Minimum value (pessimistic scenario)
+            - $c$ = Mode (most likely value)
+            - $b$ = Maximum value (optimistic scenario)
+            
+            **Use Case:** When you have optimistic, most likely, and pessimistic estimates.
+            """)
+            
+            st.markdown("---")
+            
+            # Uniform Distribution
+            st.markdown("### 4. Uniform Distribution")
+            st.latex(r"f(x) = \frac{1}{b-a} \text{ for } a \le x \le b")
+            st.markdown("""
+            Where:
+            - $a$ = Minimum value
+            - $b$ = Maximum value
+            
+            **Use Case:** Equal probability for all values within a range.
+            """)
+            
+            st.markdown("---")
+            
+            # Monte Carlo NPV
+            st.markdown("### 5. Probabilistic NPV")
+            st.markdown("""
+            In Monte Carlo simulation, we calculate NPV for each simulation run $i$:
+            """)
+            st.latex(r"NPV_i = \sum_{t=0}^{n} \frac{CF_{t,i}}{(1 + r)^t}")
+            st.markdown("""
+            Where $CF_{t,i}$ is a random sample from the cash flow distribution at time $t$ for simulation $i$.
+            
+            After running $N$ simulations, we analyze the distribution of $NPV_i$ values to determine:
+            - Mean NPV (expected value)
+            - Standard deviation (risk/uncertainty)
+            - Percentiles (e.g., 5th, 50th, 95th)
+            - Probability of positive NPV
+            """)
+            
+            st.markdown("---")
+            
+            # Value at Risk
+            st.markdown("### 6. Value at Risk (VaR)")
+            st.latex(r"VaR_\alpha = -Q_\alpha")
+            st.markdown("""
+            Where:
+            - $Q_\alpha$ = α-th percentile of the NPV distribution
+            - $\alpha$ = Confidence level (e.g., 0.05 for 5th percentile)
+            
+            VaR tells us the maximum loss we might expect at a given confidence level.
+            For example, 5% VaR is the 5th percentile of the NPV distribution.
+            """)
+        
+        with tab3:
+            st.subheader("Additional Metrics")
+            
+            # Payback Period
+            st.markdown("### 1. Payback Period")
+            st.markdown("""
+            The payback period is the time required for cumulative cash flows to equal zero:
+            """)
+            st.latex(r"\text{Payback Period} = t^* \text{ where } \sum_{t=0}^{t^*} CF_t = 0")
+            st.markdown("""
+            For non-integer payback periods, we interpolate:
+            """)
+            st.latex(r"t^* = t_{before} + \frac{|\sum_{t=0}^{t_{before}} CF_t|}{CF_{t^*}}")
+            st.markdown("""
+            **Decision Rule:**
+            - Shorter payback period = Less risk (recover investment faster)
+            - Does not account for time value of money
+            """)
+            
+            st.markdown("---")
+            
+            # Discounted Payback Period
+            st.markdown("### 2. Discounted Payback Period")
+            st.markdown("""
+            Similar to payback period, but using discounted cash flows:
+            """)
+            st.latex(r"\text{Discounted Payback} = t^* \text{ where } \sum_{t=0}^{t^*} \frac{CF_t}{(1+r)^t} = 0")
+            st.markdown("""
+            **Advantage:** Accounts for time value of money, unlike simple payback period.
+            """)
+            
+            st.markdown("---")
+            
+            # Discount Factor
+            st.markdown("### 3. Discount Factor")
+            st.markdown("""
+            The discount factor is used to convert future values to present values:
+            """)
+            st.latex(r"DF_t = \frac{1}{(1 + r)^t}")
+            st.markdown("""
+            Where:
+            - $DF_t$ = Discount factor for period $t$
+            - $r$ = Discount rate
+            - $t$ = Time period
+            
+            The discount factor decreases as time increases, reflecting that money in the future is worth less than money today.
+            """)
+            
+            st.markdown("---")
+            
+            # Coefficient of Variation
+            st.markdown("### 4. Coefficient of Variation (CV)")
+            st.markdown("""
+            Used in Monte Carlo analysis to measure risk relative to expected return:
+            """)
+            st.latex(r"CV = \frac{\sigma_{NPV}}{\mu_{NPV}}")
+            st.markdown("""
+            Where:
+            - $\sigma_{NPV}$ = Standard deviation of NPV
+            - $\mu_{NPV}$ = Mean NPV
+            
+            **Interpretation:**
+            - Lower CV = Less risk per unit of return
+            - Higher CV = More risk per unit of return
+            """)
+        
+        with tab4:
+            st.subheader("Key Definitions and Concepts")
+            
+            # Definitions
+            definitions = {
+                "Discount Rate": """
+                    The rate used to discount future cash flows to their present value. 
+                    Represents the opportunity cost of capital or required rate of return. 
+                    Common choices include WACC (Weighted Average Cost of Capital) or hurdle rate.
+                """,
+                "Cash Flow": """
+                    The amount of money flowing in or out of an investment during a specific period. 
+                    Negative cash flows represent outflows (investments, costs), while positive cash flows 
+                    represent inflows (revenues, returns).
+                """,
+                "Time Value of Money": """
+                    The principle that money available today is worth more than the same amount in the future 
+                    due to its potential earning capacity. This is the foundation of DCF analysis.
+                """,
+                "Risk-Free Rate": """
+                    The theoretical rate of return of an investment with zero risk, typically represented by 
+                    government bonds. Used as a baseline for determining required returns.
+                """,
+                "Terminal Value": """
+                    The estimated value of an investment beyond the explicit forecast period, often calculated 
+                    using a perpetuity growth model or exit multiple approach.
+                """,
+                "Sensitivity Analysis": """
+                    Analysis of how changes in input variables (e.g., discount rate, growth rate) affect 
+                    the output metric (e.g., NPV). Helps understand which assumptions are most critical.
+                """,
+                "Monte Carlo Simulation": """
+                    A computational technique that uses random sampling from probability distributions to 
+                    model uncertainty and calculate a range of possible outcomes rather than a single deterministic result.
+                """,
+                "Confidence Interval": """
+                    A range of values that is likely to contain the true value of an unknown parameter with a 
+                    specified level of confidence (e.g., 90%, 95%). In Monte Carlo, often represents the 
+                    middle 90% or 95% of simulated outcomes.
+                """
+            }
+            
+            for term, definition in definitions.items():
+                with st.expander(f"**{term}**"):
+                    st.markdown(definition)
+            
+            st.markdown("---")
+            
+            # Mathematical Symbols
+            st.markdown("### Common Mathematical Symbols")
+            symbols = {
+                "$\\sum$": "Summation (add up all terms)",
+                "$\\prod$": "Product (multiply all terms)",
+                "$\\mu$": "Mean or expected value",
+                "$\\sigma$": "Standard deviation",
+                "$\\sigma^2$": "Variance",
+                "$t$": "Time period",
+                "$n$": "Total number of periods",
+                "$r$": "Discount rate",
+                "$CF_t$": "Cash flow at time t",
+                "$PV$": "Present value",
+                "$NPV$": "Net present value",
+                "$IRR$": "Internal rate of return",
+                "$PI$": "Profitability index",
+                "$e$": "Euler's number (≈ 2.71828)",
+                "$\\pi$": "Pi (≈ 3.14159)",
+                "$\\ln$": "Natural logarithm"
+            }
+            
+            col1, col2 = st.columns(2)
+            items = list(symbols.items())
+            mid = len(items) // 2
+            
+            with col1:
+                for symbol, description in items[:mid]:
+                    st.markdown(f"{symbol}: {description}")
+            
+            with col2:
+                for symbol, description in items[mid:]:
+                    st.markdown(f"{symbol}: {description}")
+        
+        # Footer with additional resources
+        st.markdown("---")
+        st.info("""
+        💡 **Tip:** These formulas are implemented in the DCF and Monte Carlo engines that power this application. 
+        You can see them in action by analyzing investments in the other sections of this tool.
+        """)
 
 
 if __name__ == "__main__":
