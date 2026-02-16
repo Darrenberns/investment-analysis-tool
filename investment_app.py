@@ -1,6 +1,7 @@
 """
-Investment Comparison Tool - Streamlit App
+Investment Comparison Tool - Streamlit App (Enhanced with Persistence)
 A professional tool for DCF analysis, investment comparison, and Monte Carlo simulation
+Now with persistent storage, editing, import/export, and backup features
 """
 
 import streamlit as st
@@ -16,6 +17,9 @@ from pathlib import Path
 project_path = Path("/mnt/project")
 sys.path.insert(0, str(project_path))
 
+# Also add current directory for local imports
+sys.path.insert(0, str(Path.cwd()))
+
 from dcf_engine import (
     CashFlow, Investment, DCFCalculator, InvestmentComparator,
     format_currency, format_percentage
@@ -24,6 +28,7 @@ from monte_carlo_engine import (
     ProbabilisticCashFlow, ProbabilisticInvestment, 
     MonteCarloSimulator, DistributionType
 )
+from data_manager import DataManager
 
 # Page configuration
 st.set_page_config(
@@ -59,16 +64,34 @@ st.markdown("""
     .stTabs [data-baseweb="tab-list"] {
         gap: 2rem;
     }
+    .edit-badge {
+        background-color: #ffc107;
+        color: #000;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
+    .save-badge {
+        background-color: #28a745;
+        color: #fff;
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-if 'investments' not in st.session_state:
-    st.session_state.investments = []
-if 'investment_counter' not in st.session_state:
-    st.session_state.investment_counter = 0
+# Initialize data manager and session state
+if 'data_manager' not in st.session_state:
+    st.session_state.data_manager = DataManager()
 
-def create_investment_from_form(name, description, initial_investment, discount_rate, cash_flows_df):
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = "🏠 Home"
+
+
+def create_investment_from_form(name, description, initial_investment, discount_rate, cash_flows_df, investment_id=None):
     """Create an Investment object from form inputs."""
     cash_flows = [
         CashFlow(period=0, amount=initial_investment, description="Initial Investment")
@@ -84,11 +107,26 @@ def create_investment_from_form(name, description, initial_investment, discount_
                 )
             )
     
-    return Investment(
-        name=name,
-        cash_flows=cash_flows,
-        discount_rate=discount_rate
-    )
+    if investment_id:
+        # Editing existing investment - preserve ID and created_at
+        existing = st.session_state.data_manager.load_investment(investment_id)
+        return Investment(
+            id=investment_id,
+            name=name,
+            description=description,
+            cash_flows=cash_flows,
+            discount_rate=discount_rate,
+            created_at=existing.created_at if existing else None
+        )
+    else:
+        # Creating new investment
+        return Investment(
+            name=name,
+            description=description,
+            cash_flows=cash_flows,
+            discount_rate=discount_rate
+        )
+
 
 def display_metrics_cards(metrics):
     """Display key metrics in card format."""
@@ -129,6 +167,7 @@ def display_metrics_cards(metrics):
             <h2 class="{rec_class}" style="margin:0.5rem 0 0 0;">{metrics['recommendation']}</h2>
         </div>
         """, unsafe_allow_html=True)
+
 
 def create_cash_flow_chart(breakdown):
     """Create interactive cash flow visualization."""
@@ -183,6 +222,7 @@ def create_cash_flow_chart(breakdown):
     
     return fig
 
+
 def create_sensitivity_chart(sensitivity_data):
     """Create sensitivity analysis chart."""
     df = pd.DataFrame(sensitivity_data)
@@ -212,6 +252,7 @@ def create_sensitivity_chart(sensitivity_data):
     )
     
     return fig
+
 
 def create_monte_carlo_histogram(results):
     """Create histogram of Monte Carlo simulation results."""
@@ -246,6 +287,7 @@ def create_monte_carlo_histogram(results):
     
     return fig
 
+
 # ============================================================================
 # MAIN APP
 # ============================================================================
@@ -253,15 +295,25 @@ def create_monte_carlo_histogram(results):
 def main():
     st.markdown('<h1 class="main-header">📊 Investment Analysis Tool</h1>', unsafe_allow_html=True)
     st.markdown("**Professional DCF Analysis | Investment Comparison | Monte Carlo Simulation**")
+    st.markdown('<span class="save-badge">💾 AUTO-SAVE ENABLED</span>', unsafe_allow_html=True)
     
     # Sidebar navigation
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Choose a section:",
-        ["🏠 Home", "➕ New Investment", "📊 Analyze Investment", 
+        ["🏠 Home", "➕ New Investment", "✏️ Edit Investment", "📊 Analyze Investment", 
          "⚖️ Compare Investments", "🎲 Monte Carlo Simulation", 
-         "📈 Sensitivity Analysis", "💾 Manage Investments"]
+         "📈 Sensitivity Analysis", "💾 Manage Investments", "📥 Import/Export"]
     )
+    
+    # Display storage statistics in sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📊 Storage Info")
+    stats = st.session_state.data_manager.get_statistics()
+    if 'error' not in stats:
+        st.sidebar.metric("Total Investments", stats['total_count'])
+        if stats['total_count'] > 0:
+            st.sidebar.caption(f"💾 Storage: {stats['total_storage_size']:,} bytes")
     
     # ========================================================================
     # HOME PAGE
@@ -280,27 +332,32 @@ def main():
             - **Compare Opportunities**: Rank multiple investments side-by-side
             - **Assess Risk**: Run Monte Carlo simulations with uncertainty
             - **Test Scenarios**: Perform sensitivity analysis on key assumptions
+            - **💾 NEW: Persistent Storage**: All investments automatically saved
+            - **✏️ NEW: Edit Investments**: Modify existing investments anytime
+            - **📥 NEW: Import/Export**: Backup and share your data
             
             Built on proven Discounted Cash Flow (DCF) methodology used by Fortune 500 companies.
             """)
             
             st.subheader("🚀 Quick Start")
             st.markdown("""
-            1. **Create an Investment** - Add your project details and cash flows
+            1. **Create an Investment** - Add your project details and cash flows (auto-saved!)
             2. **Analyze** - View comprehensive metrics and visualizations
-            3. **Compare** - Rank multiple opportunities
-            4. **Test Uncertainty** - Run Monte Carlo simulations
+            3. **Edit** - Modify any investment details as needed
+            4. **Compare** - Rank multiple opportunities
+            5. **Export** - Backup your data or share with colleagues
             """)
         
         with col2:
             st.subheader("📊 Current Portfolio")
-            if st.session_state.investments:
-                st.metric("Total Investments", len(st.session_state.investments))
+            investments = st.session_state.data_manager.load_all_investments()
+            
+            if investments:
+                st.metric("Total Investments", len(investments))
                 
                 # Quick summary table
                 summary_data = []
-                for inv_data in st.session_state.investments:
-                    inv = inv_data['investment']
+                for inv in investments:
                     metrics = DCFCalculator.calculate_all_metrics(inv)
                     summary_data.append({
                         'Name': inv.name,
@@ -351,6 +408,7 @@ def main():
     # ========================================================================
     elif page == "➕ New Investment":
         st.header("Create New Investment")
+        st.info("💾 Your investment will be automatically saved when you click 'Create Investment'")
         
         with st.form("investment_form"):
             col1, col2 = st.columns(2)
@@ -410,7 +468,7 @@ def main():
                 }
             )
             
-            submitted = st.form_submit_button("Create Investment", use_container_width=True)
+            submitted = st.form_submit_button("💾 Create Investment", use_container_width=True)
             
             if submitted:
                 if not name:
@@ -427,27 +485,146 @@ def main():
                             discount_rate, df_editor
                         )
                         
-                        # Calculate metrics
-                        metrics = DCFCalculator.calculate_all_metrics(investment)
-                        
-                        # Store in session state
-                        st.session_state.investments.append({
-                            'id': st.session_state.investment_counter,
-                            'investment': investment,
-                            'metrics': metrics,
-                            'description': description
-                        })
-                        st.session_state.investment_counter += 1
-                        
-                        st.success(f"✅ Investment '{name}' created successfully!")
-                        st.balloons()
-                        
-                        # Show quick preview
-                        st.subheader("Quick Preview")
-                        display_metrics_cards(metrics)
+                        # Save to persistent storage
+                        if st.session_state.data_manager.save_investment(investment):
+                            # Calculate metrics
+                            metrics = DCFCalculator.calculate_all_metrics(investment)
+                            
+                            st.success(f"✅ Investment '{name}' created and saved successfully!")
+                            st.balloons()
+                            
+                            # Show quick preview
+                            st.subheader("Quick Preview")
+                            display_metrics_cards(metrics)
+                        else:
+                            st.error("❌ Failed to save investment. Please try again.")
                         
                     except Exception as e:
                         st.error(f"Error creating investment: {str(e)}")
+    
+    # ========================================================================
+    # EDIT INVESTMENT PAGE (NEW)
+    # ========================================================================
+    elif page == "✏️ Edit Investment":
+        st.header("Edit Investment")
+        st.info("💾 Changes will be automatically saved when you click 'Save Changes'")
+        
+        investments = st.session_state.data_manager.load_all_investments()
+        
+        if not investments:
+            st.warning("No investments available. Create one first!")
+            return
+        
+        # Select investment to edit
+        investment_options = {inv.name: inv.id for inv in investments}
+        selected_name = st.selectbox(
+            "Select Investment to Edit",
+            options=list(investment_options.keys())
+        )
+        
+        if selected_name:
+            investment_id = investment_options[selected_name]
+            investment = st.session_state.data_manager.load_investment(investment_id)
+            
+            if investment:
+                # Display edit form
+                with st.form("edit_investment_form"):
+                    st.markdown(f'<span class="edit-badge">EDITING: {investment.name}</span>', unsafe_allow_html=True)
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        name = st.text_input("Investment Name*", value=investment.name)
+                        description = st.text_area(
+                            "Description", 
+                            value=investment.description if investment.description else ""
+                        )
+                    
+                    with col2:
+                        # Find initial investment
+                        initial_cf = next((cf for cf in investment.cash_flows if cf.period == 0), None)
+                        initial_investment = st.number_input(
+                            "Initial Investment ($)*",
+                            value=float(initial_cf.amount if initial_cf else -100000.0),
+                            step=10000.0,
+                            help="Enter as negative value"
+                        )
+                        discount_rate = st.slider(
+                            "Discount Rate (%)*",
+                            min_value=1.0,
+                            max_value=30.0,
+                            value=float(investment.discount_rate * 100),
+                            step=0.5
+                        ) / 100
+                    
+                    st.subheader("Cash Flows")
+                    
+                    # Get existing cash flows (excluding initial investment)
+                    future_cfs = [cf for cf in investment.cash_flows if cf.period > 0]
+                    max_period = max(cf.period for cf in future_cfs) if future_cfs else 5
+                    
+                    # Allow changing number of years
+                    num_years = st.slider("Number of Years", min_value=1, max_value=10, value=max_period)
+                    
+                    # Prepare cash flow data
+                    cash_flow_data = {
+                        'Year': list(range(1, num_years + 1)),
+                        'Amount': [0.0] * num_years,
+                        'Description': [''] * num_years
+                    }
+                    
+                    # Fill in existing values
+                    for cf in future_cfs:
+                        if cf.period <= num_years:
+                            cash_flow_data['Amount'][cf.period - 1] = cf.amount
+                            cash_flow_data['Description'][cf.period - 1] = cf.description or ''
+                    
+                    df_editor = st.data_editor(
+                        pd.DataFrame(cash_flow_data),
+                        use_container_width=True,
+                        num_rows="fixed",
+                        column_config={
+                            "Year": st.column_config.NumberColumn("Year", disabled=True, width="small"),
+                            "Amount": st.column_config.NumberColumn("Amount ($)", format="$%.2f", width="medium"),
+                            "Description": st.column_config.TextColumn("Description", width="large")
+                        }
+                    )
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        save_button = st.form_submit_button("💾 Save Changes", use_container_width=True)
+                    with col2:
+                        cancel_button = st.form_submit_button("❌ Cancel", use_container_width=True)
+                    
+                    if save_button:
+                        if not name:
+                            st.error("Please enter an investment name")
+                        elif initial_investment >= 0:
+                            st.error("Initial investment must be negative")
+                        else:
+                            try:
+                                # Create updated investment
+                                updated_investment = create_investment_from_form(
+                                    name, description, initial_investment,
+                                    discount_rate, df_editor, investment_id=investment_id
+                                )
+                                
+                                # Save updates
+                                if st.session_state.data_manager.update_investment(updated_investment):
+                                    st.success(f"✅ Investment '{name}' updated successfully!")
+                                    st.balloons()
+                                    
+                                    # Show updated metrics
+                                    metrics = DCFCalculator.calculate_all_metrics(updated_investment)
+                                    st.subheader("Updated Metrics")
+                                    display_metrics_cards(metrics)
+                                else:
+                                    st.error("❌ Failed to save changes. Please try again.")
+                            except Exception as e:
+                                st.error(f"Error updating investment: {str(e)}")
+                    
+                    if cancel_button:
+                        st.info("Changes cancelled")
     
     # ========================================================================
     # ANALYZE INVESTMENT PAGE
@@ -455,28 +632,32 @@ def main():
     elif page == "📊 Analyze Investment":
         st.header("Analyze Investment")
         
-        if not st.session_state.investments:
+        investments = st.session_state.data_manager.load_all_investments()
+        
+        if not investments:
             st.warning("No investments available. Create one first!")
             return
         
         # Select investment
-        investment_names = [inv['investment'].name for inv in st.session_state.investments]
-        selected_name = st.selectbox("Select Investment to Analyze", investment_names)
+        investment_options = {inv.name: inv for inv in investments}
+        selected_name = st.selectbox("Select Investment to Analyze", list(investment_options.keys()))
         
-        # Find selected investment
-        selected_inv_data = next(
-            (inv for inv in st.session_state.investments 
-             if inv['investment'].name == selected_name),
-            None
-        )
-        
-        if selected_inv_data:
-            investment = selected_inv_data['investment']
-            metrics = selected_inv_data['metrics']
+        if selected_name:
+            investment = investment_options[selected_name]
             
             # Display description if available
-            if selected_inv_data['description']:
-                st.info(f"**Description:** {selected_inv_data['description']}")
+            if investment.description:
+                st.info(f"**Description:** {investment.description}")
+            
+            # Display metadata
+            col1, col2 = st.columns(2)
+            with col1:
+                st.caption(f"📅 Created: {investment.created_at.strftime('%Y-%m-%d %H:%M')}")
+            with col2:
+                st.caption(f"✏️ Modified: {investment.modified_at.strftime('%Y-%m-%d %H:%M')}")
+            
+            # Calculate metrics
+            metrics = DCFCalculator.calculate_all_metrics(investment)
             
             # Key Metrics
             st.subheader("Key Metrics")
@@ -529,7 +710,9 @@ def main():
     elif page == "⚖️ Compare Investments":
         st.header("Compare Investments")
         
-        if len(st.session_state.investments) < 2:
+        investments = st.session_state.data_manager.load_all_investments()
+        
+        if len(investments) < 2:
             st.warning("You need at least 2 investments to compare. Create more investments first!")
             return
         
@@ -546,8 +729,7 @@ def main():
             "Profitability Index": "pi"
         }
         
-        # Get all investments for comparison
-        investments = [inv['investment'] for inv in st.session_state.investments]
+        # Get comparison
         comparison = InvestmentComparator.compare_investments(
             investments,
             ranking_metric=metric_map[ranking_metric]
@@ -639,28 +821,24 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
     
     # ========================================================================
-    # MONTE CARLO SIMULATION PAGE
+    # MONTE CARLO SIMULATION PAGE (continued from original - no changes needed)
     # ========================================================================
     elif page == "🎲 Monte Carlo Simulation":
         st.header("Monte Carlo Simulation")
         st.markdown("**Model uncertainty in cash flows using probability distributions**")
         
-        if not st.session_state.investments:
+        investments = st.session_state.data_manager.load_all_investments()
+        
+        if not investments:
             st.warning("No investments available. Create one first!")
             return
         
         # Select base investment
-        investment_names = [inv['investment'].name for inv in st.session_state.investments]
-        selected_name = st.selectbox("Select Base Investment", investment_names)
+        investment_options = {inv.name: inv for inv in investments}
+        selected_name = st.selectbox("Select Base Investment", list(investment_options.keys()))
         
-        selected_inv_data = next(
-            (inv for inv in st.session_state.investments 
-             if inv['investment'].name == selected_name),
-            None
-        )
-        
-        if selected_inv_data:
-            investment = selected_inv_data['investment']
+        if selected_name:
+            investment = investment_options[selected_name]
             
             st.subheader("Configure Uncertainty")
             st.markdown("Define probability distributions for each year's cash flows:")
@@ -837,22 +1015,18 @@ def main():
         st.header("Sensitivity Analysis")
         st.markdown("**Analyze how NPV changes with different discount rates**")
         
-        if not st.session_state.investments:
+        investments = st.session_state.data_manager.load_all_investments()
+        
+        if not investments:
             st.warning("No investments available. Create one first!")
             return
         
         # Select investment
-        investment_names = [inv['investment'].name for inv in st.session_state.investments]
-        selected_name = st.selectbox("Select Investment", investment_names)
+        investment_options = {inv.name: inv for inv in investments}
+        selected_name = st.selectbox("Select Investment", list(investment_options.keys()))
         
-        selected_inv_data = next(
-            (inv for inv in st.session_state.investments 
-             if inv['investment'].name == selected_name),
-            None
-        )
-        
-        if selected_inv_data:
-            investment = selected_inv_data['investment']
+        if selected_name:
+            investment = investment_options[selected_name]
             
             col1, col2 = st.columns(2)
             
@@ -919,12 +1093,11 @@ def main():
                 # Key insights
                 st.subheader("Key Insights")
                 
-                # Find break-even rate (where NPV = 0)
+                # Find break-even rate
                 npv_values = df['npv'].values
                 rates = df['discount_rate'].values
                 
                 if (npv_values > 0).any() and (npv_values < 0).any():
-                    # Find approximate break-even
                     sign_changes = np.where(np.diff(np.sign(npv_values)))[0]
                     if len(sign_changes) > 0:
                         idx = sign_changes[0]
@@ -938,43 +1111,199 @@ def main():
     elif page == "💾 Manage Investments":
         st.header("Manage Investments")
         
-        if not st.session_state.investments:
+        investments = st.session_state.data_manager.load_all_investments()
+        
+        if not investments:
             st.info("No investments to manage yet.")
             return
         
         st.subheader("All Investments")
         
         # Create summary table
-        for idx, inv_data in enumerate(st.session_state.investments):
-            investment = inv_data['investment']
-            metrics = inv_data['metrics']
+        for idx, investment in enumerate(investments):
+            metrics = DCFCalculator.calculate_all_metrics(investment)
             
             with st.expander(f"📁 {investment.name}", expanded=False):
                 col1, col2, col3 = st.columns([2, 1, 1])
                 
                 with col1:
-                    st.markdown(f"**Description:** {inv_data['description']}")
+                    st.markdown(f"**Description:** {investment.description if investment.description else 'N/A'}")
                     st.markdown(f"**Discount Rate:** {format_percentage(investment.discount_rate)}")
                     st.markdown(f"**NPV:** {format_currency(metrics['npv'])}")
                     st.markdown(f"**IRR:** {format_percentage(metrics['irr']) if metrics['irr'] else 'N/A'}")
                 
                 with col2:
-                    st.markdown(f"**Initial Investment:** {format_currency(investment.cash_flows[0].amount)}")
+                    initial_cf = next((cf for cf in investment.cash_flows if cf.period == 0), None)
+                    st.markdown(f"**Initial Investment:** {format_currency(initial_cf.amount if initial_cf else 0)}")
                     st.markdown(f"**Time Horizon:** {max(cf.period for cf in investment.cash_flows)} years")
+                    st.caption(f"Created: {investment.created_at.strftime('%Y-%m-%d')}")
+                    st.caption(f"Modified: {investment.modified_at.strftime('%Y-%m-%d')}")
                 
                 with col3:
-                    if st.button("🗑️ Delete", key=f"delete_{idx}"):
-                        st.session_state.investments.pop(idx)
-                        st.rerun()
+                    if st.button("🗑️ Delete", key=f"delete_{investment.id}"):
+                        if st.session_state.data_manager.delete_investment(investment.id):
+                            st.success(f"Deleted '{investment.name}'")
+                            st.rerun()
+                        else:
+                            st.error("Failed to delete")
         
         # Bulk actions
         st.subheader("Bulk Actions")
-        if st.button("🗑️ Clear All Investments"):
-            if st.checkbox("Yes, I'm sure I want to delete all investments"):
-                st.session_state.investments = []
-                st.session_state.investment_counter = 0
-                st.success("All investments deleted!")
-                st.rerun()
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("📥 Create Backup"):
+                success, result = st.session_state.data_manager.create_backup()
+                if success:
+                    st.success(f"✅ Backup created: {result}")
+                else:
+                    st.error(f"❌ {result}")
+        
+        with col2:
+            if st.button("🗑️ Clear All Investments"):
+                if st.checkbox("⚠️ Yes, I'm sure I want to delete all investments"):
+                    if st.session_state.data_manager.delete_all_investments():
+                        st.success("All investments deleted! (Backup created)")
+                        st.rerun()
+    
+    # ========================================================================
+    # IMPORT/EXPORT PAGE (NEW)
+    # ========================================================================
+    elif page == "📥 Import/Export":
+        st.header("Import/Export Data")
+        st.markdown("**Backup, restore, and share your investment data**")
+        
+        tab1, tab2, tab3 = st.tabs(["📤 Export", "📥 Import", "🔄 Backups"])
+        
+        # EXPORT TAB
+        with tab1:
+            st.subheader("Export Investments")
+            st.markdown("Download all your investments as a JSON file for backup or sharing.")
+            
+            if st.button("📤 Export All Investments", use_container_width=True):
+                import tempfile
+                import os
+                
+                # Create temp file
+                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as tmp:
+                    tmp_path = tmp.name
+                
+                # Export to temp file
+                if st.session_state.data_manager.export_to_file(tmp_path):
+                    # Read file for download
+                    with open(tmp_path, 'r') as f:
+                        export_data = f.read()
+                    
+                    # Provide download button
+                    from datetime import datetime
+                    filename = f"investments_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                    
+                    st.download_button(
+                        label="⬇️ Download Export File",
+                        data=export_data,
+                        file_name=filename,
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                    
+                    st.success("✅ Export ready! Click the button above to download.")
+                    
+                    # Cleanup
+                    os.unlink(tmp_path)
+                else:
+                    st.error("❌ Export failed")
+            
+            # Show statistics
+            stats = st.session_state.data_manager.get_statistics()
+            if 'error' not in stats and stats['total_count'] > 0:
+                st.info(f"📊 Exporting {stats['total_count']} investments")
+        
+        # IMPORT TAB
+        with tab2:
+            st.subheader("Import Investments")
+            st.markdown("Upload a previously exported JSON file to restore or merge investments.")
+            
+            uploaded_file = st.file_uploader(
+                "Choose a JSON file",
+                type=['json'],
+                help="Select an export file from this tool"
+            )
+            
+            if uploaded_file is not None:
+                import tempfile
+                import os
+                
+                # Save uploaded file temporarily
+                with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.json') as tmp:
+                    tmp.write(uploaded_file.getvalue())
+                    tmp_path = tmp.name
+                
+                # Import mode
+                overwrite = st.radio(
+                    "Import Mode",
+                    ["Merge (keep existing, add new)", "Overwrite (replace all)"],
+                    help="Choose how to handle existing investments"
+                )
+                
+                if st.button("📥 Import", use_container_width=True):
+                    success, message = st.session_state.data_manager.import_from_file(
+                        tmp_path,
+                        overwrite=(overwrite == "Overwrite (replace all)")
+                    )
+                    
+                    if success:
+                        st.success(f"✅ {message}")
+                        st.balloons()
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {message}")
+                
+                # Cleanup
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
+        
+        # BACKUPS TAB
+        with tab3:
+            st.subheader("Manage Backups")
+            st.markdown("Automatic backups are created when you clear all investments or restore from backup.")
+            
+            # Create manual backup
+            if st.button("💾 Create Backup Now", use_container_width=True):
+                success, result = st.session_state.data_manager.create_backup()
+                if success:
+                    st.success(f"✅ Backup created: {result}")
+                else:
+                    st.error(f"❌ {result}")
+            
+            # List backups
+            backups = st.session_state.data_manager.list_backups()
+            
+            if backups:
+                st.subheader("Available Backups")
+                
+                for backup in backups:
+                    with st.expander(f"📦 {backup['filename']}"):
+                        col1, col2 = st.columns([2, 1])
+                        
+                        with col1:
+                            st.caption(f"**Created:** {backup['created']}")
+                            st.caption(f"**Size:** {backup['size']:,} bytes")
+                        
+                        with col2:
+                            if st.button("🔄 Restore", key=f"restore_{backup['filename']}"):
+                                if st.checkbox(f"Confirm restore from {backup['filename']}", key=f"confirm_{backup['filename']}"):
+                                    success, message = st.session_state.data_manager.restore_from_backup(backup['path'])
+                                    if success:
+                                        st.success(f"✅ {message}")
+                                        st.rerun()
+                                    else:
+                                        st.error(f"❌ {message}")
+            else:
+                st.info("No backups available yet. Backups are created automatically when needed.")
+
 
 if __name__ == "__main__":
     main()

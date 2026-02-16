@@ -6,8 +6,10 @@ including NPV, IRR, payback period, and other DCF metrics.
 """
 
 from typing import List, Dict, Optional, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
+from datetime import datetime
+import uuid
 import numpy as np
 from scipy.optimize import newton
 
@@ -33,6 +35,10 @@ class Investment:
     name: str
     cash_flows: List[CashFlow]
     discount_rate: float  # Annual discount rate (e.g., 0.10 for 10%)
+    description: Optional[str] = None
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: datetime = field(default_factory=datetime.now)
+    modified_at: datetime = field(default_factory=datetime.now)
     
     def __post_init__(self):
         """Validate investment data."""
@@ -43,6 +49,12 @@ class Investment:
         
         # Sort cash flows by period
         self.cash_flows.sort(key=lambda cf: cf.period)
+        
+        # Ensure datetime objects (in case loaded from dict with strings)
+        if isinstance(self.created_at, str):
+            self.created_at = datetime.fromisoformat(self.created_at)
+        if isinstance(self.modified_at, str):
+            self.modified_at = datetime.fromisoformat(self.modified_at)
     
     def get_cash_flow_array(self) -> np.ndarray:
         """Convert cash flows to numpy array for calculations."""
@@ -53,6 +65,82 @@ class Investment:
             cash_flow_array[cf.period] = cf.amount
         
         return cash_flow_array
+    
+    def to_dict(self) -> Dict:
+        """
+        Convert Investment to dictionary for JSON serialization.
+        
+        Returns:
+            Dictionary representation of the investment
+        """
+        return {
+            'id': self.id,
+            'name': self.name,
+            'description': self.description,
+            'discount_rate': self.discount_rate,
+            'created_at': self.created_at.isoformat(),
+            'modified_at': self.modified_at.isoformat(),
+            'cash_flows': [
+                {
+                    'period': cf.period,
+                    'amount': cf.amount,
+                    'description': cf.description
+                }
+                for cf in self.cash_flows
+            ]
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'Investment':
+        """
+        Create Investment from dictionary (deserialization).
+        
+        Args:
+            data: Dictionary containing investment data
+            
+        Returns:
+            Investment object
+        """
+        # Reconstruct cash flows
+        cash_flows = [
+            CashFlow(
+                period=cf_data['period'],
+                amount=cf_data['amount'],
+                description=cf_data.get('description')
+            )
+            for cf_data in data['cash_flows']
+        ]
+        
+        # Create investment
+        return cls(
+            id=data.get('id', str(uuid.uuid4())),
+            name=data['name'],
+            description=data.get('description'),
+            discount_rate=data['discount_rate'],
+            cash_flows=cash_flows,
+            created_at=data.get('created_at', datetime.now().isoformat()),
+            modified_at=data.get('modified_at', datetime.now().isoformat())
+        )
+    
+    def update(self, **kwargs):
+        """
+        Update investment fields.
+        
+        Args:
+            **kwargs: Fields to update (name, description, discount_rate, cash_flows)
+        """
+        if 'name' in kwargs:
+            self.name = kwargs['name']
+        if 'description' in kwargs:
+            self.description = kwargs['description']
+        if 'discount_rate' in kwargs:
+            self.discount_rate = kwargs['discount_rate']
+        if 'cash_flows' in kwargs:
+            self.cash_flows = kwargs['cash_flows']
+            self.cash_flows.sort(key=lambda cf: cf.period)
+        
+        # Update modified timestamp
+        self.modified_at = datetime.now()
 
 
 class DCFCalculator:
@@ -84,7 +172,7 @@ class DCFCalculator:
         """
         Calculate Net Present Value (NPV) of an investment.
         
-        NPV = Î£(CFt / (1 + r)^t) where t = 0 to n
+        NPV = ÃŽÂ£(CFt / (1 + r)^t) where t = 0 to n
         
         Args:
             investment: Investment object with cash flows and discount rate
